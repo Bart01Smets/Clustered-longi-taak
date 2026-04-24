@@ -380,18 +380,16 @@ AIC(fit_lin, fit_quad)
 ```
 
 ```{r}
-# Piecewise linear  (knot at year 75 but don't think it's necessary)
 dat <- within(dat, year_75 <- pmax(year - 75, 0))
 
-fit_spl_ml <- lme(
+fit_spl <- lme(
   log_income ~ sex * year + year_75,
-  random = list(person = pdDiag(form = ~ year)),
+  random = ~ year | person,
   correlation = corCAR1(form = ~ year | person),
-  data = dat, na.action = na.omit, method = "ML"
-)
+  data = dat, na.action = na.omit, method = "ML")
 
-anova(fit6_ml, fit_spl_ml)
-AIC(fit6_ml, fit_spl_ml)
+anova(fit_lin, fit_spl)
+AIC(fit_lin, fit_spl)
 
 ```
 
