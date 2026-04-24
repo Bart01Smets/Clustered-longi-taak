@@ -346,25 +346,37 @@ AIC(fit5, fit6)
 
 ## Form of year effect
 
-Plot of residuals against year to detect non-linearity
+Linear model: 
 
 ```{r}
-# linear vs quadratic
-fit6_ml <- lme(
+fit_lin <- lme(
   log_income ~ sex * year,
-  random = list(person = pdDiag(form = ~ year)),
-  correlation = corCAR1(form = ~ year | person),
-  data = dat, na.action = na.omit, method = "ML"
-)
-fit_quad_ml <- lme(
-  log_income ~ sex * year + I(year^2),
-  random = list(person = pdDiag(form = ~ year)),
-  correlation = corCAR1(form = ~ year | person),
-  data = dat, na.action = na.omit, method = "ML"
-)
-anova(fit6_ml, fit_quad_ml)
-AIC(fit6_ml, fit_quad_ml)
+  random = ~ year | person,
+  correlation = corAR1(form = ~ year | person),
+  weights = NULL,
+  data = dat,
+  na.action = na.omit,
+  method = "ML")
+```
 
+Quadratic model:
+
+```{r}
+fit_quad <- lme(
+  log_income ~ sex * (year + I(year^2))
+  random = ~ year | person,
+  correlation = corAR1(form = ~ year | person),
+  weights = NULL,
+  data = dat,
+  na.action = na.omit,
+  method = "ML")
+```
+
+Model comparison: 
+```{r}
+anova(fit_lin, fit_quad)
+AIC(fit_lin, fit_quad)
+```
 ```
 
 ```{r}
