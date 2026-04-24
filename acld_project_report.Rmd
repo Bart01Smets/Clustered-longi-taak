@@ -1,0 +1,434 @@
+---
+title: 'Analysis of Clustered and Longitudinal Data: Project 1'
+author: "Runa Broekaert, Kobe De Neve and Bart Smets"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(nlme)
+library(gridExtra)
+library(corrplot)
+```
+
+## Load and inspect data
+
+```{r}
+dat <- read.table("income1968.dat", header = TRUE, stringsAsFactors = TRUE)
+dat <- within(dat, person <- factor(person))
+
+str(dat)
+summary(dat)
+```
+
+## Plots
+
+```{r}
+ggplot(dat, aes(x = year, y = income, group = person, col = sex)) +
+  geom_line(alpha = 0.6) +
+  facet_wrap(facet = ~ sex) +
+  theme_minimal() +
+  guides(col = "none")
+```
+
+What do we see?
+
+-   Globally:
+
+    -   some imbalance/missing data, because not all subjects were measured every year, e.g. subject 11 has no measurement for 1968, subject 12 has no measurement for 1968-1969 and 1988-1990, ...
+
+    -   increasing trend
+
+    -   individual variability
+
+    -   'fanning out': smaller variance at baseline, more variation towards the end \> suggests random intercepts and slopes
+
+-   Gender differences:
+
+    -   more variation and more outliers for men, also confirmed by boxplots for income per gender:
+
+```{r}
+ggplot(dat, aes(x = sex, y = income, col = sex)) +
+  geom_boxplot() +
+  theme_minimal() +
+  guides(col = "none")
+```
+
+The mean structure looks as follows:
+
+```{r, message = FALSE}
+ggplot(dat, aes(x = year, y = income, col = sex)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess") +
+  facet_wrap(facet = ~ sex) +
+  theme_minimal() +
+  guides(col = "none")
+```
+
+What do we see?
+
+-   smoothers are relatively linear
+
+-   variance of data points around smoother increases with time
+
+Why might log-transform of income be useful?
+
+```{r, message = FALSE}
+ggplot(dat, aes(x = year, y = log(income), group = person, col = sex)) +
+  geom_line(alpha = 0.6) +
+  facet_wrap(facet = ~ sex) +
+  theme_minimal() +
+  guides(col = "none")
+
+ggplot(dat, aes(x = year, y = log(income), col = sex)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess") +
+  facet_wrap(facet = ~ sex) +
+  theme_minimal() +
+  guides(col = "none")
+
+income_hist <- ggplot(dat, aes(x = income)) +
+  geom_histogram() +
+  theme_minimal()
+
+log_income_hist <- ggplot(dat, aes(x = log(income))) +
+  geom_histogram() +
+  theme_minimal()
+
+grid.arrange(income_hist, log_income_hist, nrow = 1)
+```
+
+What do we see?
+
+-   variance is more constant (no 'fanning' as before)
+
+-   marginal distribution of income is more symmetrical
+
+Next, we assess the relationship between the log-transformed income and the remaining variables.
+
+log(income) against age:
+
+```{r}
+ggplot(dat, aes(x = age, y = log(income), col = sex)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess") +
+  labs(x = "age at baseline") +
+  facet_wrap(facet = "sex") +
+  theme_minimal() +
+  guides(col = "none")
+
+ggplot(dat, aes(x = factor(age), y = log(income), col = sex)) +
+  geom_boxplot() +
+  labs(x = "age at baseline") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+What do we see?
+
+-   relatively horizontal mean structure, but some non-linearity and increasing trend for men after age 32
+
+-   no very clear variance pattern
+
+log(income) against years of education:
+
+```{r}
+ggplot(dat, aes(x = educ, y = log(income), col = sex)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess") +
+  facet_wrap(facet = ~ sex) +
+  labs(x = "years of education") +
+  theme_minimal() +
+  guides(col = "none")
+
+ggplot(dat, aes(x = factor(educ), y = log(income), col = sex)) +
+  geom_boxplot() +
+  labs(x = "years of education") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+What do we see?
+
+-   for some levels of years of education, only one of the two genders is represented
+
+-   some none-linearity in mean structure
+
+-   some increase in variance
+
+Finally, we have a look at the correlation between measurements at different time points.
+
+```{r}
+dat_wide <- pivot_wider(dat, names_from = "year", values_from = "income")
+dat_wide[, 5:27] <- log(dat_wide[, 5:27])
+
+corrplot(cor(dat_wide[, 5:27], use = "na.or.complete"),
+         method = "number",
+         type = "upper")
+```
+
+What do we see?
+
+-   correlations of log(income) at different measurement times
+
+-   correlations decrease over time
+
+-   NOTE: missing values \> is this plot useful??
+
+-   didn't do a scatterplot matrix using ggpairs() because there are too many time points
+
+## Initial model
+
+Considerations for our first model with age and sex:
+
+-   mean structure
+
+    -   start with maximal mean structure, so include interaction
+    -   treat year variable as a factor, we will later check whether we can assume linearity
+
+-   covariance structure
+
+    -   plots above showed a relatively homogeneous variance over time (constant variance on diagonal of covariance matrix)
+
+    -   need to take into account clustering of observations within people
+
+    -   since we have longitudinal data, it is likely that observations within subjects closer in time are more correlated than observations that are further apart in time; the correlation plot also showed this, so we need to account for it.
+
+    -   the measurements are annual, i.e. made at approximately equal time intervals
+
+    -\> random intercept + first-order autoregressive
+
+```{r}
+dat <- within(dat, log_income <- log(income))
+dat <- within(dat, cyear <- factor(year))
+
+fit1 <- lme(
+  log_income ~ sex * cyear,
+  random = ~ 1 | person,
+  correlation = corCAR1(form = ~ year | person),
+  weights = varIdent(form = ~ 1),
+  data = dat,
+  na.action = na.omit,
+  method = "REML"
+)
+```
+
+Do we need autoregressive covariance structure?
+
+```{r}
+fit2 <- lme(
+  log_income ~ sex * cyear,
+  random = ~ 1 | person,
+  correlation = NULL,
+  weights = NULL,
+  data = dat,
+  na.action = na.omit,
+  method = "REML"
+)
+
+anova(fit1, fit2)
+```
+
+Checking the mean structure: can we assume linearity for year?
+
+```{r}
+fit1 <- lme(
+  log_income ~ sex * cyear,
+  random = ~ 1 | person,
+  correlation = corCAR1(form = ~ year | person),
+  weights = varIdent(form = ~ 1),
+  data = dat,
+  na.action = na.omit,
+  method = "ML" # refit first model with ML
+)
+
+fit3 <- lme(
+  log_income ~ sex * year,
+  random = ~ 1 | person,
+  correlation = corCAR1(form = ~ year | person),
+  weights = NULL,
+  data = dat,
+  na.action = na.omit,
+  method = "ML"
+)
+
+anova(fit1, fit3)
+```
+
+## Random slopes
+
+Do we need random slopes for year? Both test and AIC say yes:
+
+```{r}
+fit1 <- lme(
+  log_income ~ sex * year,
+  random = ~ 1 | person,
+  correlation = corAR1(form = ~ year | person),
+  weights = NULL,
+  data = dat,
+  na.action = na.omit,
+  method = "REML"
+)
+
+fit5 <- lme(
+  log_income ~ sex * year,
+  random = ~ year | person,
+  correlation = corAR1(form = ~ year | person),
+  weights = NULL,
+  data = dat,
+  na.action = na.omit,
+  method = "REML"
+)
+
+lrr <- logLik(fit1)
+lrf <- logLik(fit5)
+lr <- as.numeric(-2 * (lrr - lrf))
+df1 <- 1 # right degrees of freedom????
+df2 <- 2
+p1 <- pchisq(lr, df1, lower.tail = FALSE)
+p2 <- pchisq(lr, df2, lower.tail = FALSE)
+p <- (p1 + p2) * 0.5
+lrt <- data.frame(
+  lr = lr,
+  df1 = df1,
+  df2 = df2,
+  p = p
+)
+lrt
+```
+
+```{r}
+AIC(fit1, fit5)
+```
+
+Interpretation of random slope
+
+```{r}
+coef(summary(fit5))
+```
+
+```{r}
+VarCorr(fit5)
+```
+
+For 95% of subjects, the average annual increase in log income lies between `0.09 - 1.96 * 0.039 = 0.0312` and `0.09 + 1.96 * 0.039 = 0.1488`.
+
+## Covariance between random slopes and intercepts
+
+```{r}
+blups <- as.data.frame(as.matrix(ranef(fit5)))
+blups$Subject <- row.names(blups)
+
+ggplot(blups, aes(x = `(Intercept)`, y = year, label = Subject)) +
+  geom_text() + 
+  labs(x = "Intercept", y = "Year") +
+  theme_minimal()
+```
+
+```{r}
+fit6 <- lme(
+  log_income ~ sex * year,
+  random = list(person = pdDiag(form = ~ year)),
+  correlation = corCAR1(form = ~ year | person),
+  weights = NULL,
+  data = dat,
+  na.action = na.omit,
+  method = "REML"
+)
+
+AIC(fit5, fit6)
+```
+
+## Form of year effect
+
+Plot of residuals against year to detect non-linearity
+
+```{r}
+# linear vs quadratic
+fit6_ml <- lme(
+  log_income ~ sex * year,
+  random = list(person = pdDiag(form = ~ year)),
+  correlation = corCAR1(form = ~ year | person),
+  data = dat, na.action = na.omit, method = "ML"
+)
+fit_quad_ml <- lme(
+  log_income ~ sex * year + I(year^2),
+  random = list(person = pdDiag(form = ~ year)),
+  correlation = corCAR1(form = ~ year | person),
+  data = dat, na.action = na.omit, method = "ML"
+)
+anova(fit6_ml, fit_quad_ml)
+AIC(fit6_ml, fit_quad_ml)
+
+```
+
+```{r}
+# Piecewise linear  (knot at year 75 but don't think it's necessary)
+dat <- within(dat, year_75 <- pmax(year - 75, 0))
+
+fit_spl_ml <- lme(
+  log_income ~ sex * year + year_75,
+  random = list(person = pdDiag(form = ~ year)),
+  correlation = corCAR1(form = ~ year | person),
+  data = dat, na.action = na.omit, method = "ML"
+)
+
+anova(fit6_ml, fit_spl_ml)
+AIC(fit6_ml, fit_spl_ml)
+
+```
+
+We find a non-significant p-value twice, implying that both a quadratic trend and a piecewise linear model do not improve on a linear model.
+
+```{r}
+#Test if age and educ should be included in the model.
+fit_cov_ml <- lme(
+  log_income ~ sex * year + age + educ,
+  random = list(person = pdDiag(form = ~ year)),
+  correlation = corCAR1(form = ~ year | person),
+  data = dat, na.action = na.omit, method = "ML"
+)
+
+anova(fit6_ml, fit_cov_ml)  
+
+
+# Results previous analysis significant-> Age and educ interaction with year test
+fit_inter_ml <- lme(
+  log_income ~ sex * year + age * year + educ * year,
+  random = list(person = pdDiag(form = ~ year)),
+  correlation = corCAR1(form = ~ year | person),
+  data = dat, na.action = na.omit, method = "ML"
+)
+
+anova(fit_cov_ml, fit_inter_ml) 
+
+# REML for inference
+fit_final <- lme(
+  log_income ~ sex * year + age + educ,
+  random = list(person = pdDiag(form = ~ year)),
+  correlation = corCAR1(form = ~ year | person),
+  data = dat, na.action = na.omit, method = "REML"
+)
+
+coef(summary(fit_final))
+anova(fit_final, type = "marginal")
+```
+```{r}
+
+dat$pred_log <- predict(fit_final, level = 0)
+
+ggplot(dat, aes(x = year, y = pred_log, colour = sex)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
+  scale_colour_manual(values = c("F" = "coral", "M" = "steelblue"),
+                      labels = c("Female", "Male")) +
+  labs(x = "year", y = "Pred log(income)",
+       title = "Predicted log(income) by sex",
+       colour = "Sex") +
+  theme_minimal()
+```
+No interaction necessary as slopes divergent!
