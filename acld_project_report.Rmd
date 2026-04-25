@@ -363,7 +363,7 @@ Quadratic model:
 
 ```{r}
 fit_quad <- lme(
-  log_income ~ sex * (year + I(year^2))
+  log_income ~ sex * (year + I(year^2)),
   random = ~ year | person,
   correlation = corAR1(form = ~ year | person),
   weights = NULL,
@@ -377,7 +377,11 @@ Model comparison:
 anova(fit_lin, fit_quad)
 AIC(fit_lin, fit_quad)
 ```
-```
+
+
+We subsequently compare our previously derived model to a quadratic model by the use of a likelihood ratio test, to decide whether the year-variable should enter the model linearly or quadratically. The p-value of 0.0944 indicates that we cannot reject the null hypothesis that the quadratic model improves the fit of the data in comparison to the linear model. Therefore, we decide to not add a linear year variable to the model.
+
+Then, we also test whether a piecewise model provides a better fit. We therefore also fit a piecewise linear model with a knot at the age of 75. Again, a likelihood ratio test is performed to assess whether this model gives a better fit. The p-value indicates that this model does not give a significantly better fit than the initial model, and thus we decide against using the piecewise linear model.
 
 ```{r}
 dat <- within(dat, year_75 <- pmax(year - 75, 0))
@@ -390,10 +394,9 @@ fit_spl <- lme(
 
 anova(fit_lin, fit_spl)
 AIC(fit_lin, fit_spl)
-
 ```
 
-We find a non-significant p-value twice, implying that both a quadratic trend and a piecewise linear model do not improve on a linear model.
+
 
 ```{r}
 #Test if age and educ should be included in the model.
@@ -404,7 +407,7 @@ fit_cov_ml <- lme(
   data = dat, na.action = na.omit, method = "ML"
 )
 
-anova(fit6_ml, fit_cov_ml)  
+anova(fit_lin, fit_cov_ml)  
 
 
 # Results previous analysis significant-> Age and educ interaction with year test
@@ -427,6 +430,18 @@ fit_final <- lme(
 
 coef(summary(fit_final))
 anova(fit_final, type = "marginal")
+
+# 95% CI for the year:sex interaction
+library(multcomp)
+
+L <- matrix(
+  c(0, 0, 0, 0, 0, 1),
+  nrow = 1,
+  dimnames = list("sexM:year", names(coef(fit_final)))
+)
+confint(glht(fit_final, linfct = L), calpha = univariate_calpha())
+
+
 ```
 ```{r}
 
@@ -441,4 +456,6 @@ ggplot(dat, aes(x = year, y = pred_log, colour = sex)) +
        colour = "Sex") +
   theme_minimal()
 ```
-No interaction necessary as slopes divergent!
+We add the 'age and 'educ' variable to the model to assess if the inclusion of these variables improves our model fit. We find that both variables significantly improve the model fit (as indicated by the p-value of 0.0015). If then, additionally, an interaction term with year is added, it is found that this interaction term is not significant. This implies that age and education affect the level of log(income), but not the growth rate. Thus, only the main effects are kept in the model.
+
+In this final model, which we fit using REML for valid inference, we find a significant sex-year interaction term. Specifically its coefficient of 0.0238 indicates that men's log(income) grows 0.0238 (95% CI: 0.0015, 0.0461) units per year less compared to women(when we control for age and education). We also illustrate this in figure x, men consistently have a higher income than women, however the gap becomes smaller over time.
